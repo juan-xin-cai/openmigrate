@@ -1,0 +1,19 @@
+{
+  "agent": "claude-code",
+  "version": "v2",
+  "roots": [
+    ".claude.json",
+    ".claude"
+  ],
+  "entries": [
+    {"path": ".claude.json", "strategy": "field-strip", "fields": ["secrets", "oauth:*", "token*", "device_id_salt"]},
+    {"path": ".claude/settings.json", "strategy": "include"},
+    {"path": ".claude/history.jsonl", "strategy": "include"},
+    {"path": ".claude/projects/**", "strategy": "include"},
+    {"path": ".claude/skills/**", "strategy": "include"},
+    {"path": ".claude/plugins/**", "strategy": "include"},
+    {"path": ".claude/agents/**", "strategy": "include"},
+    {"path": ".claude/commands/**", "strategy": "include"},
+    {"path": ".claude/sessions/**", "strategy": "exclude"}
+  ]
+}
