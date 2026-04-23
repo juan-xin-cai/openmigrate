@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/openmigrate/openmigrate/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -23,9 +24,11 @@ func NewRootCommand(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "openmigrate",
 		Short:         "OpenMigrate CLI",
+		Version:       buildinfo.Summary(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	cmd.SetVersionTemplate("{{printf \"%s\\n\" .Version}}")
 	cmd.SetIn(app.Streams.In)
 	cmd.SetOut(app.Streams.Out)
 	cmd.SetErr(app.Streams.ErrOut)
