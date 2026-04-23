@@ -12,10 +12,16 @@ import (
 	"github.com/openmigrate/openmigrate/internal/core/types"
 )
 
+var (
+	execCommand    = exec.Command
+	lookPath       = exec.LookPath
+	desktopAppPath = "/Applications/Claude.app"
+)
+
 type Params struct {
-	Mode               types.DoctorMode
+	Mode                types.DoctorMode
 	ExpectedPackageSize int64
-	AbortOnSkew        bool
+	AbortOnSkew         bool
 	PackageAgentVersion string
 }
 
@@ -25,17 +31,17 @@ func Run(params Params, logger *omlog.Logger) (types.DoctorReport, error) {
 		report.Items = append(report.Items, types.DoctorItem{Name: name, Status: status, Message: message})
 	}
 
-	if output, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+	if output, err := execCommand("sw_vers", "-productVersion").Output(); err == nil {
 		add("macOS", types.DoctorPass, strings.TrimSpace(string(output)))
 	} else {
 		add("macOS", types.DoctorWarn, "无法读取 macOS 版本")
 	}
 
-	claudePath, err := exec.LookPath("claude")
+	claudePath, err := lookPath("claude")
 	if err != nil {
 		add("claude", types.DoctorBlock, "未找到 Claude Code 可执行文件")
 	} else {
-		versionOutput, versionErr := exec.Command(claudePath, "--version").Output()
+		versionOutput, versionErr := execCommand(claudePath, "--version").Output()
 		if versionErr != nil {
 			add("claude", types.DoctorBlock, "Claude Code 无法返回版本")
 		} else {
@@ -56,17 +62,31 @@ func Run(params Params, logger *omlog.Logger) (types.DoctorReport, error) {
 		}
 	}
 
+	if _, err := os.Stat(desktopAppPath); err != nil {
+		add("claude-desktop", types.DoctorWarn, "未找到 Claude Desktop")
+	} else {
+		add("claude-desktop", types.DoctorPass, "已安装 Claude Desktop")
+		version, err := readDesktopVersion()
+		if err != nil || version == "" {
+			add("claude-desktop-version", types.DoctorWarn, "Claude Desktop version unreadable")
+		} else {
+			add("claude-desktop-version", types.DoctorPass, version)
+		}
+	}
+
 	home, err := os.UserHomeDir()
 	if err == nil {
-		fdaPath := filepath.Join(home, "Library", "Application Support", "Claude")
-		if _, err := os.ReadDir(fdaPath); err != nil {
-			if os.IsPermission(err) {
-				add("full-disk-access", types.DoctorBlock, "Full Disk Access 未授权")
+		if params.Mode == types.DoctorModeImport {
+			desktopDataPath := filepath.Join(home, "Library", "Application Support", "Claude")
+			if _, err := os.ReadDir(desktopDataPath); err != nil {
+				if os.IsPermission(err) {
+					add("claude-desktop-full-disk-access", types.DoctorBlock, "Full Disk Access for Claude Desktop 未授权")
+				} else {
+					add("claude-desktop-full-disk-access", types.DoctorBlock, "Full Disk Access for Claude Desktop 未授权或数据目录不可读")
+				}
 			} else {
-				add("full-disk-access", types.DoctorWarn, "Claude 数据目录不存在或不可读")
+				add("claude-desktop-full-disk-access", types.DoctorPass, "Claude Desktop 数据目录可读")
 			}
-		} else {
-			add("full-disk-access", types.DoctorPass, "Claude 数据目录可读")
 		}
 
 		if params.ExpectedPackageSize > 0 {
@@ -86,6 +106,19 @@ func Run(params Params, logger *omlog.Logger) (types.DoctorReport, error) {
 		logger.Info("doctor finished", map[string]interface{}{"items": len(report.Items)})
 	}
 	return report, nil
+}
+
+func readDesktopVersion() (string, error) {
+	output, err := execCommand("plutil", "-extract", "CFBundleShortVersionString", "xml1", filepath.Join(desktopAppPath, "Contents", "Info.plist"), "-o", "-").Output()
+	if err != nil {
+		return "", err
+	}
+	re := regexp.MustCompile(`<string>([^<]+)</string>`)
+	matches := re.FindStringSubmatch(string(output))
+	if len(matches) == 2 {
+		return strings.TrimSpace(matches[1]), nil
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func sameMajor(left, right string) bool {

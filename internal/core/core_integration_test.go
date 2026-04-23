@@ -245,6 +245,229 @@ func TestExportPackageDoesNotContainSecretsField(t *testing.T) {
 	}
 }
 
+func TestExportIncludesDesktopDataAndInspect(t *testing.T) {
+	sourceHome := t.TempDir()
+	outputDir := t.TempDir()
+	passphrase := "pass-1"
+
+	setupDesktopSource(t, sourceHome, "acct-1")
+	exportResult, err := Export(context.Background(), ExportParams{
+		SourceHome: sourceHome,
+		Agent:      "claude-code",
+		Version:    "v2",
+		OutputDir:  outputDir,
+		Passphrase: passphrase,
+	})
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	root, meta, err := pack.UnpackPackage(exportResult.PackagePath, passphrase)
+	if err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	defer os.RemoveAll(filepath.Dir(root))
+
+	configData, err := ioutil.ReadFile(filepath.Join(root, "Library", "Application Support", "Claude", "config.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(configData), "oauth:token") || strings.Contains(string(configData), "dxt:allowlist") {
+		t.Fatalf("desktop config still contains stripped fields: %s", configData)
+	}
+	preferencesData, err := ioutil.ReadFile(filepath.Join(root, "Library", "Application Support", "Claude", "Preferences"))
+	if err != nil {
+		t.Fatalf("read preferences: %v", err)
+	}
+	if strings.Contains(string(preferencesData), "device_id_salt") || strings.Contains(string(preferencesData), "per_host_zoom_levels") {
+		t.Fatalf("preferences still contains stripped fields: %s", preferencesData)
+	}
+	sessionData, err := ioutil.ReadFile(filepath.Join(root, "Library", "Application Support", "Claude", "local-agent-mode-sessions", "s1", ".claude", ".claude.json"))
+	if err != nil {
+		t.Fatalf("read local session config: %v", err)
+	}
+	if strings.Contains(string(sessionData), "oauthAccount") {
+		t.Fatalf("local agent session still contains oauthAccount: %s", sessionData)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Library", "Application Support", "Claude", "local-agent-mode-sessions", "s1", ".audit-key")); !os.IsNotExist(err) {
+		t.Fatalf(".audit-key should be excluded, err=%v", err)
+	}
+	if meta.OwnerAccountID != "acct-1" {
+		t.Fatalf("owner account id = %q", meta.OwnerAccountID)
+	}
+	if len(meta.AgentTypes) != 1 || meta.AgentTypes[0] != "claude-desktop" {
+		t.Fatalf("agent types = %#v", meta.AgentTypes)
+	}
+
+	inspected, err := Inspect(context.Background(), types.InspectParams{PkgPath: exportResult.PackagePath})
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inspected.OwnerAccountID != "acct-1" {
+		t.Fatalf("inspect owner account id = %q", inspected.OwnerAccountID)
+	}
+}
+
+func TestImportRejectsDesktopAccountMismatch(t *testing.T) {
+	sourceHome := t.TempDir()
+	outputDir := t.TempDir()
+	targetHome := t.TempDir()
+	passphrase := "pass-1"
+
+	setupDesktopSource(t, sourceHome, "acct-1")
+	writeDesktopAccount(t, targetHome, "acct-2")
+
+	exportResult, err := Export(context.Background(), ExportParams{
+		SourceHome: sourceHome,
+		Agent:      "claude-code",
+		Version:    "v2",
+		OutputDir:  outputDir,
+		Passphrase: passphrase,
+	})
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	_, err = Import(context.Background(), ImportParams{
+		PackagePath: exportResult.PackagePath,
+		Passphrase:  passphrase,
+		TargetHome:  targetHome,
+	})
+	if !errors.Is(err, types.ErrAccountMismatch) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestExportWithoutDesktopSessionsLeavesOwnerAccountEmptyAndSkipsAccountCheck(t *testing.T) {
+	sourceHome := t.TempDir()
+	outputDir := t.TempDir()
+	targetHome := t.TempDir()
+	passphrase := "pass-1"
+
+	setupDesktopSource(t, sourceHome, "acct-1")
+	writeDesktopAccount(t, targetHome, "acct-2")
+
+	exportResult, err := Export(context.Background(), ExportParams{
+		SourceHome:    sourceHome,
+		Agent:         "claude-code",
+		Version:       "v2",
+		OutputDir:     outputDir,
+		Passphrase:    passphrase,
+		ExcludeScopes: []string{"sessions"},
+	})
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	meta, err := Inspect(context.Background(), types.InspectParams{PkgPath: exportResult.PackagePath})
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if meta.OwnerAccountID != "" {
+		t.Fatalf("owner account id = %q", meta.OwnerAccountID)
+	}
+
+	_, err = Import(context.Background(), ImportParams{
+		PackagePath: exportResult.PackagePath,
+		Passphrase:  passphrase,
+		TargetHome:  targetHome,
+	})
+	if err != nil {
+		t.Fatalf("import should skip account check, got %v", err)
+	}
+}
+
+func TestExportFailsWhenDesktopSessionsIncludedButAccountFileMissing(t *testing.T) {
+	sourceHome := t.TempDir()
+	outputDir := t.TempDir()
+
+	mustWriteFileCore(t, filepath.Join(sourceHome, "Library", "Application Support", "Claude", "config.json"), `{"keep":"ok"}`)
+	mustWriteFileCore(t, filepath.Join(sourceHome, "Library", "Application Support", "Claude", "local-agent-mode-sessions", "s1", ".claude", ".claude.json"), `{"oauthAccount":"acct-1","keep":"ok"}`)
+
+	_, err := Export(context.Background(), ExportParams{
+		SourceHome: sourceHome,
+		Agent:      "claude-code",
+		Version:    "v2",
+		OutputDir:  outputDir,
+		Passphrase: "pass-1",
+	})
+	if err == nil {
+		t.Fatalf("expected export to fail when owner account file is missing")
+	}
+	if !strings.Contains(err.Error(), "ownerAccountId") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyImportAllowsDesktopAccountMismatchWithSkipAndRewritesGitWorktrees(t *testing.T) {
+	sourceHome := t.TempDir()
+	outputDir := t.TempDir()
+	targetHome := t.TempDir()
+	passphrase := "pass-1"
+
+	setupDesktopSource(t, sourceHome, "acct-1")
+	mustWriteFileCore(
+		t,
+		filepath.Join(sourceHome, "Library", "Application Support", "Claude", "git-worktrees.json"),
+		`{"worktrees":{"main":"/Users/roy/projects/foo"}}`,
+	)
+	writeDesktopAccount(t, targetHome, "acct-2")
+
+	exportResult, err := Export(context.Background(), ExportParams{
+		SourceHome: sourceHome,
+		Agent:      "claude-code",
+		Version:    "v2",
+		OutputDir:  outputDir,
+		Passphrase: passphrase,
+	})
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	mappedDir := filepath.Join(targetHome, "workspace", "foo")
+	result, err := ApplyImport(context.Background(), ImportApplyParams{
+		PackagePath:             exportResult.PackagePath,
+		Passphrase:              passphrase,
+		SkipDesktopSessionCheck: true,
+		Mapping: types.PathMapping{
+			SourceHome: "/Users/roy",
+			TargetHome: targetHome,
+			ProjectMappings: []types.PathPair{
+				{From: "/Users/roy/projects/foo", To: mappedDir},
+			},
+		},
+		Decisions: types.ConflictDecision{Actions: map[string]types.DecisionAction{
+			"Library":                            types.DecisionOverwrite,
+			"Library/Application Support":        types.DecisionOverwrite,
+			"Library/Application Support/Claude": types.DecisionOverwrite,
+			"Library/Application Support/Claude/cowork-enabled-cli-ops.json": types.DecisionOverwrite,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("apply import: %v", err)
+	}
+	if len(result.Snapshot.Targets) == 0 {
+		t.Fatalf("snapshot missing targets")
+	}
+
+	worktreesData, err := ioutil.ReadFile(filepath.Join(targetHome, "Library", "Application Support", "Claude", "git-worktrees.json"))
+	if err != nil {
+		t.Fatalf("read git-worktrees: %v", err)
+	}
+	if !strings.Contains(string(worktreesData), mappedDir) {
+		t.Fatalf("git-worktrees not rewritten: %s", worktreesData)
+	}
+	if strings.Contains(string(worktreesData), "/Users/roy/projects/foo") {
+		t.Fatalf("git-worktrees still contains source path: %s", worktreesData)
+	}
+}
+
+func TestInspectReturnsMetaNotFound(t *testing.T) {
+	_, err := Inspect(context.Background(), types.InspectParams{PkgPath: filepath.Join(t.TempDir(), "missing.ommigrate")})
+	if !errors.Is(err, types.ErrMetaNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func setupClaudeSource(t *testing.T, home string) {
 	t.Helper()
 	mustWriteFileCore(t, filepath.Join(home, ".claude.json"), `{"user":"roy"}`)
@@ -276,4 +499,21 @@ func mustWriteFileCore(t *testing.T, path, content string) {
 	if err := ioutil.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func setupDesktopSource(t *testing.T, home, accountID string) {
+	t.Helper()
+	writeDesktopAccount(t, home, accountID)
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "config.json"), `{"oauth:token":"abc","dxt:allowlist-dev":true,"keep":"ok"}`)
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "Preferences"), `{"electron":{"media":{"device_id_salt":"salt","other":"keep"}},"partition":{"one":{"per_host_zoom_levels":{"a":1},"keep":true}}}`)
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), `{"mcp":"ok"}`)
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "extensions-blocklist.json"), `{"blocked":[]}`)
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "git-worktrees.json"), `{"worktrees":{}}`)
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "local-agent-mode-sessions", "s1", ".claude", ".claude.json"), `{"oauthAccount":"acct-1","keep":"ok"}`)
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "local-agent-mode-sessions", "s1", ".audit-key"), "secret")
+}
+
+func writeDesktopAccount(t *testing.T, home, accountID string) {
+	t.Helper()
+	mustWriteFileCore(t, filepath.Join(home, "Library", "Application Support", "Claude", "cowork-enabled-cli-ops.json"), `{"ownerAccountId":"`+accountID+`"}`)
 }

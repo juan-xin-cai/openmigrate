@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/openmigrate/openmigrate/internal/core/types"
 )
 
 func TestLoadPrefersExternalConfig(t *testing.T) {
@@ -41,5 +43,46 @@ func TestLoadFallsBackToEmbeddedConfig(t *testing.T) {
 	}
 	if len(cfg.Roots) == 0 || cfg.Roots[0] != ".claude.json" {
 		t.Fatalf("unexpected roots = %#v", cfg.Roots)
+	}
+}
+
+func TestLoadClaudeDesktopConfig(t *testing.T) {
+	cfg, err := Load("claude-desktop", "v1")
+	if err != nil {
+		t.Fatalf("load desktop config: %v", err)
+	}
+	if len(cfg.Entries) != 12 {
+		t.Fatalf("desktop entries = %d", len(cfg.Entries))
+	}
+	var configEntry, preferencesEntry types.WhitelistEntry
+	var excludeCount int
+	for _, entry := range cfg.Entries {
+		switch entry.Path {
+		case "Library/Application Support/Claude/config.json":
+			configEntry = entry
+		case "Library/Application Support/Claude/Preferences":
+			preferencesEntry = entry
+		}
+		if entry.Strategy == types.StrategyExclude {
+			excludeCount++
+		}
+	}
+	if len(configEntry.FieldStripRules) != 2 {
+		t.Fatalf("config field strip rules = %#v", configEntry.FieldStripRules)
+	}
+	if len(preferencesEntry.FieldStripRules) != 2 {
+		t.Fatalf("preferences field strip rules = %#v", preferencesEntry.FieldStripRules)
+	}
+	if excludeCount != 4 {
+		t.Fatalf("exclude count = %d", excludeCount)
+	}
+}
+
+func TestMatchSupportsRecursivePatterns(t *testing.T) {
+	if !Match("Library/Application Support/Claude/local-agent-mode-sessions/a/.claude/.claude.json", "Library/Application Support/Claude/local-agent-mode-sessions/**/.claude/.claude.json") {
+		t.Fatalf("recursive match failed")
+	}
+	if !Match("Library/Application Support/Claude/claude-code-sessions/foo", "Library/Application Support/Claude/claude-code-sessions/") {
+		t.Fatalf("directory prefix match failed")
 	}
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/openmigrate/openmigrate/internal/core/types"
 )
 
-//go:embed claude-code-v2.json
+//go:embed claude-code-v2.json claude-desktop-v1.json
 var embeddedFiles embed.FS
 
 func Load(agent, version string) (types.AgentConfig, error) {
@@ -38,18 +38,23 @@ func Load(agent, version string) (types.AgentConfig, error) {
 func Match(relPath, pattern string) bool {
 	relPath = filepath.ToSlash(strings.TrimPrefix(relPath, "/"))
 	pattern = filepath.ToSlash(strings.TrimPrefix(pattern, "/"))
-	if strings.HasSuffix(pattern, "/**") {
-		base := strings.TrimSuffix(pattern, "/**")
+	if strings.HasSuffix(pattern, "/") {
+		base := strings.TrimSuffix(pattern, "/")
 		return relPath == base || strings.HasPrefix(relPath, base+"/")
 	}
-	matched, _ := filepath.Match(pattern, relPath)
-	return matched
+	return matchSegments(splitPath(relPath), splitPath(pattern))
 }
 
 func decodeConfig(name string, data []byte) (types.AgentConfig, error) {
 	var cfg types.AgentConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return types.AgentConfig{}, fmt.Errorf("decode whitelist %s: %w", name, err)
+	}
+	for i := range cfg.Entries {
+		if len(cfg.Entries[i].FieldStripRules) > 0 || len(cfg.Entries[i].Fields) == 0 {
+			continue
+		}
+		cfg.Entries[i].FieldStripRules = legacyFieldsToRules(cfg.Entries[i].Fields)
 	}
 	return cfg, nil
 }
@@ -69,4 +74,49 @@ func searchDirs() []string {
 		dirs = append(dirs, filepath.Join(exeDir, "..", "share", "openmigrate", "whitelist"))
 	}
 	return dirs
+}
+
+func legacyFieldsToRules(fields []string) []types.FieldStripRule {
+	rules := make([]types.FieldStripRule, 0, len(fields))
+	for _, field := range fields {
+		switch {
+		case strings.HasSuffix(field, ":*"):
+			rules = append(rules, types.FieldStripRule{Type: types.FieldStripRulePrefix, Value: strings.TrimSuffix(field, "*")})
+		case strings.HasSuffix(field, "*"):
+			rules = append(rules, types.FieldStripRule{Type: types.FieldStripRulePrefix, Value: strings.TrimSuffix(field, "*")})
+		default:
+			rules = append(rules, types.FieldStripRule{Type: types.FieldStripRuleExactPath, Value: field})
+		}
+	}
+	return rules
+}
+
+func splitPath(value string) []string {
+	if value == "" || value == "." {
+		return nil
+	}
+	return strings.Split(value, "/")
+}
+
+func matchSegments(pathSegments, patternSegments []string) bool {
+	if len(patternSegments) == 0 {
+		return len(pathSegments) == 0
+	}
+	if patternSegments[0] == "**" {
+		if matchSegments(pathSegments, patternSegments[1:]) {
+			return true
+		}
+		if len(pathSegments) == 0 {
+			return false
+		}
+		return matchSegments(pathSegments[1:], patternSegments)
+	}
+	if len(pathSegments) == 0 {
+		return false
+	}
+	matched, err := filepath.Match(patternSegments[0], pathSegments[0])
+	if err != nil || !matched {
+		return false
+	}
+	return matchSegments(pathSegments[1:], patternSegments[1:])
 }

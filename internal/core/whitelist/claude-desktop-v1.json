@@ -1,0 +1,77 @@
+{
+  "agent": "claude-desktop",
+  "version": "v1",
+  "roots": [
+    "Library/Application Support/Claude"
+  ],
+  "entries": [
+    {
+      "path": "Library/Application Support/Claude/claude_desktop_config.json",
+      "strategy": "include",
+      "scopes": ["mcp"]
+    },
+    {
+      "path": "Library/Application Support/Claude/config.json",
+      "strategy": "field-strip",
+      "scopes": ["settings"],
+      "field_strip_rules": [
+        {"type": "prefix", "value": "oauth:"},
+        {"type": "prefix", "value": "dxt:allowlist"}
+      ]
+    },
+    {
+      "path": "Library/Application Support/Claude/Preferences",
+      "strategy": "field-strip",
+      "scopes": ["settings"],
+      "field_strip_rules": [
+        {"type": "exact-path", "value": "electron.media.device_id_salt"},
+        {"type": "glob-path", "value": "partition.*.per_host_zoom_levels"}
+      ]
+    },
+    {
+      "path": "Library/Application Support/Claude/claude-code-sessions/",
+      "strategy": "include",
+      "scopes": ["sessions"]
+    },
+    {
+      "path": "Library/Application Support/Claude/local-agent-mode-sessions/",
+      "strategy": "field-strip",
+      "scopes": ["sessions"],
+      "field_strip_rules": [
+        {"type": "exact-path", "value": "oauthAccount"}
+      ]
+    },
+    {
+      "path": "Library/Application Support/Claude/local-agent-mode-sessions/**/.audit-key",
+      "strategy": "exclude",
+      "scopes": ["sessions"]
+    },
+    {
+      "path": "Library/Application Support/Claude/extensions-blocklist.json",
+      "strategy": "include",
+      "scopes": ["settings"]
+    },
+    {
+      "path": "Library/Application Support/Claude/cowork-enabled-cli-ops.json",
+      "strategy": "include",
+      "scopes": ["sessions"]
+    },
+    {
+      "path": "Library/Application Support/Claude/git-worktrees.json",
+      "strategy": "include",
+      "scopes": ["projects"]
+    },
+    {
+      "path": "Library/Application Support/Claude/claude-code/",
+      "strategy": "exclude"
+    },
+    {
+      "path": "Library/Application Support/Claude/claude-code-vm/",
+      "strategy": "exclude"
+    },
+    {
+      "path": "Library/Application Support/Claude/vm_bundles/",
+      "strategy": "exclude"
+    }
+  ]
+}

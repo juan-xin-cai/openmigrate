@@ -15,6 +15,19 @@ const (
 	StrategyFieldStrip Strategy = "field-strip"
 )
 
+type FieldStripRuleType string
+
+const (
+	FieldStripRulePrefix    FieldStripRuleType = "prefix"
+	FieldStripRuleExactPath FieldStripRuleType = "exact-path"
+	FieldStripRuleGlobPath  FieldStripRuleType = "glob-path"
+)
+
+type FieldStripRule struct {
+	Type  FieldStripRuleType `json:"type"`
+	Value string             `json:"value"`
+}
+
 type AgentConfig struct {
 	Agent   string           `json:"agent"`
 	Version string           `json:"version"`
@@ -23,9 +36,11 @@ type AgentConfig struct {
 }
 
 type WhitelistEntry struct {
-	Path     string   `json:"path"`
-	Strategy Strategy `json:"strategy"`
-	Fields   []string `json:"fields,omitempty"`
+	Path            string           `json:"path"`
+	Strategy        Strategy         `json:"strategy"`
+	Fields          []string         `json:"fields,omitempty"`
+	Scopes          []string         `json:"scopes,omitempty"`
+	FieldStripRules []FieldStripRule `json:"field_strip_rules,omitempty"`
 }
 
 type Manifest struct {
@@ -33,6 +48,13 @@ type Manifest struct {
 	Entries    []FileEntry
 	Links      []LinkRelation
 	TotalSize  int64
+}
+
+type ManifestParams struct {
+	SourceHome    string
+	OnlyScopes    []string
+	ExcludeScopes []string
+	NoHistory     bool
 }
 
 type FileEntry struct {
@@ -49,6 +71,8 @@ type FileEntry struct {
 	GroupKey         string
 	ContentSHA256    string
 	OriginalContents []byte
+	FieldStripRules  []FieldStripRule
+	Scopes           []string
 }
 
 type LinkRelation struct {
@@ -128,21 +152,27 @@ type SnapshotMeta struct {
 }
 
 type PackageMeta struct {
-	SchemaVersion int            `json:"schema_version"`
-	Hostname      string         `json:"hostname"`
-	CreatedAt     time.Time      `json:"created_at"`
-	Agent         string         `json:"agent"`
-	AgentVersion  string         `json:"agent_version"`
-	PathScan      PathScanResult `json:"path_scan"`
-	FileCount     int            `json:"file_count"`
-	TotalSize     int64          `json:"total_size"`
-	Links         []LinkRelation `json:"links"`
+	SchemaVersion  int            `json:"schema_version"`
+	Hostname       string         `json:"hostname"`
+	CreatedAt      time.Time      `json:"created_at"`
+	Agent          string         `json:"agent"`
+	AgentVersion   string         `json:"agent_version"`
+	AgentTypes     []string       `json:"agent_types,omitempty"`
+	OwnerAccountID string         `json:"owner_account_id,omitempty"`
+	PathScan       PathScanResult `json:"path_scan"`
+	FileCount      int            `json:"file_count"`
+	TotalSize      int64          `json:"total_size"`
+	Links          []LinkRelation `json:"links"`
 }
 
 type ImportPreview struct {
 	Meta             PackageMeta    `json:"meta"`
 	PathScan         PathScanResult `json:"path_scan"`
 	SuggestedMapping PathMapping    `json:"suggested_mapping"`
+}
+
+type InspectParams struct {
+	PkgPath string
 }
 
 type DoctorMode string

@@ -6,14 +6,14 @@
     ".claude"
   ],
   "entries": [
-    {"path": ".claude.json", "strategy": "field-strip", "fields": ["secrets", "oauth:*", "token*", "device_id_salt"]},
-    {"path": ".claude/settings.json", "strategy": "include"},
-    {"path": ".claude/history.jsonl", "strategy": "include"},
-    {"path": ".claude/projects/**", "strategy": "include"},
-    {"path": ".claude/skills/**", "strategy": "include"},
-    {"path": ".claude/plugins/**", "strategy": "include"},
-    {"path": ".claude/agents/**", "strategy": "include"},
-    {"path": ".claude/commands/**", "strategy": "include"},
-    {"path": ".claude/sessions/**", "strategy": "exclude"}
+    {"path": ".claude.json", "strategy": "field-strip", "fields": ["secrets", "oauth:*", "token*", "device_id_salt"], "scopes": ["settings"]},
+    {"path": ".claude/settings.json", "strategy": "include", "scopes": ["settings"]},
+    {"path": ".claude/history.jsonl", "strategy": "include", "scopes": ["projects"]},
+    {"path": ".claude/projects/**", "strategy": "include", "scopes": ["projects"]},
+    {"path": ".claude/skills/**", "strategy": "include", "scopes": ["skills"]},
+    {"path": ".claude/plugins/**", "strategy": "include", "scopes": ["plugins"]},
+    {"path": ".claude/agents/**", "strategy": "include", "scopes": ["agents"]},
+    {"path": ".claude/commands/**", "strategy": "include", "scopes": ["commands"]},
+    {"path": ".claude/sessions/**", "strategy": "exclude", "scopes": ["sessions"]}
   ]
 }

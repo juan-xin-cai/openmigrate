@@ -15,6 +15,10 @@ var (
 	ErrPathMappingRequired      = errors.New("path mapping is required before conflict detection")
 	ErrConflictDecisionRequired = errors.New("conflict decision is required")
 	ErrSnapshotNotFound         = errors.New("snapshot not found")
+	ErrNotJSON                  = errors.New("input is not valid json")
+	ErrMetaNotFound             = errors.New("package meta not found")
+	ErrConflictingScopeFilter   = errors.New("only-scopes and exclude-scopes cannot be combined")
+	ErrAccountMismatch          = errors.New("claude desktop account mismatch")
 )
 
 type ErrorCode string

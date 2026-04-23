@@ -1,17 +1,16 @@
 package pack
 
 import (
-	"encoding/json"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/openmigrate/openmigrate/internal/core/fieldstrip"
+	omlog "github.com/openmigrate/openmigrate/internal/core/log"
 	"github.com/openmigrate/openmigrate/internal/core/types"
 )
 
-func CreatePackage(manifest types.Manifest, meta types.PackageMeta, outputPath, metaPath, passphrase string) error {
+func CreatePackage(manifest types.Manifest, meta types.PackageMeta, outputPath, metaPath, passphrase string, logger *omlog.Logger) error {
 	stageDir, err := os.MkdirTemp("", "openmigrate-pack-*")
 	if err != nil {
 		return err
@@ -26,7 +25,7 @@ func CreatePackage(manifest types.Manifest, meta types.PackageMeta, outputPath, 
 			}
 			continue
 		}
-		if err := copyEntry(entry, dest); err != nil {
+		if err := copyEntry(entry, dest, logger); err != nil {
 			return err
 		}
 	}
@@ -65,12 +64,12 @@ func CreatePackage(manifest types.Manifest, meta types.PackageMeta, outputPath, 
 	return WriteMeta(metaPath, meta)
 }
 
-func copyEntry(entry types.FileEntry, target string) error {
+func copyEntry(entry types.FileEntry, target string, logger *omlog.Logger) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	if entry.Strategy == types.StrategyFieldStrip {
-		return copyStrippedJSON(entry, target)
+	if len(entry.FieldStripRules) > 0 {
+		return copyStrippedJSON(entry, target, logger)
 	}
 	src, err := os.Open(entry.SourcePath)
 	if err != nil {
@@ -86,46 +85,20 @@ func copyEntry(entry types.FileEntry, target string) error {
 	return err
 }
 
-func copyStrippedJSON(entry types.FileEntry, target string) error {
-	data, err := ioutil.ReadFile(entry.SourcePath)
+func copyStrippedJSON(entry types.FileEntry, target string, logger *omlog.Logger) error {
+	data, err := os.ReadFile(entry.SourcePath)
 	if err != nil {
 		return err
 	}
-	var payload interface{}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return ioutil.WriteFile(target, data, entry.Mode)
-	}
-	payload = stripSensitiveFields(payload)
-	clean, err := json.Marshal(payload)
+	clean, err := fieldstrip.Strip(data, entry.FieldStripRules)
 	if err != nil {
-		return err
-	}
-	return ioutil.WriteFile(target, clean, entry.Mode)
-}
-
-func stripSensitiveFields(node interface{}) interface{} {
-	switch typed := node.(type) {
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(typed))
-		for key, value := range typed {
-			if shouldStripField(key) {
-				continue
+		if err == types.ErrNotJSON {
+			if logger != nil {
+				logger.Warn("field strip skipped for non-json entry", map[string]interface{}{"path": entry.RelativePath})
 			}
-			out[key] = stripSensitiveFields(value)
+			return os.WriteFile(target, data, entry.Mode)
 		}
-		return out
-	case []interface{}:
-		out := make([]interface{}, 0, len(typed))
-		for _, value := range typed {
-			out = append(out, stripSensitiveFields(value))
-		}
-		return out
-	default:
-		return node
+		return err
 	}
-}
-
-func shouldStripField(key string) bool {
-	lower := strings.ToLower(key)
-	return lower == "secrets" || strings.HasPrefix(lower, "oauth:") || strings.HasPrefix(lower, "token") || lower == "device_id_salt"
+	return os.WriteFile(target, clean, entry.Mode)
 }

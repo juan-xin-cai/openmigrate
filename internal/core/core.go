@@ -2,11 +2,16 @@ package core
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/openmigrate/openmigrate/internal/core/accountcheck"
 	"github.com/openmigrate/openmigrate/internal/core/conflict"
 	"github.com/openmigrate/openmigrate/internal/core/doctor"
 	omlog "github.com/openmigrate/openmigrate/internal/core/log"
@@ -23,12 +28,15 @@ import (
 )
 
 type ExportParams struct {
-	SourceHome string
-	Agent      string
-	Version    string
-	OutputDir  string
-	Passphrase string
-	Verbose    io.Writer
+	SourceHome    string
+	Agent         string
+	Version       string
+	OutputDir     string
+	Passphrase    string
+	OnlyScopes    []string
+	ExcludeScopes []string
+	NoHistory     bool
+	Verbose       io.Writer
 }
 
 type ExportResult struct {
@@ -39,11 +47,12 @@ type ExportResult struct {
 }
 
 type ImportParams struct {
-	PackagePath string
-	Passphrase  string
-	TargetHome  string
-	Mapping     types.PathMapping
-	Verbose     io.Writer
+	PackagePath             string
+	Passphrase              string
+	TargetHome              string
+	Mapping                 types.PathMapping
+	SkipDesktopSessionCheck bool
+	Verbose                 io.Writer
 }
 
 type ImportPreviewParams struct {
@@ -54,11 +63,12 @@ type ImportPreviewParams struct {
 }
 
 type ImportApplyParams struct {
-	PackagePath string
-	Passphrase  string
-	Mapping     types.PathMapping
-	Decisions   types.ConflictDecision
-	Verbose     io.Writer
+	PackagePath             string
+	Passphrase              string
+	Mapping                 types.PathMapping
+	Decisions               types.ConflictDecision
+	SkipDesktopSessionCheck bool
+	Verbose                 io.Writer
 }
 
 type DoctorParams struct {
@@ -97,7 +107,20 @@ func Export(ctx context.Context, params ExportParams) (ExportResult, error) {
 	if err != nil {
 		return ExportResult{}, err
 	}
-	manifestResult, err := manifest.Build(sourceHome, cfg)
+	configs := []types.AgentConfig{cfg}
+	if params.Agent == "claude-code" {
+		desktopCfg, err := whitelist.Load("claude-desktop", "v1")
+		if err != nil {
+			return ExportResult{}, err
+		}
+		configs = append(configs, desktopCfg)
+	}
+	manifestResult, err := manifest.Build(types.ManifestParams{
+		SourceHome:    sourceHome,
+		OnlyScopes:    params.OnlyScopes,
+		ExcludeScopes: params.ExcludeScopes,
+		NoHistory:     params.NoHistory,
+	}, configs...)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -122,12 +145,22 @@ func Export(ctx context.Context, params ExportParams) (ExportResult, error) {
 		CreatedAt:     time.Now(),
 		Agent:         params.Agent,
 		AgentVersion:  params.Version,
+		AgentTypes:    collectAgentTypes(manifestResult),
 		PathScan:      scanResult,
 		FileCount:     len(manifestResult.Entries),
 		TotalSize:     manifestResult.TotalSize,
 		Links:         manifestResult.Links,
 	}
-	if err := pack.CreatePackage(manifestResult, meta, packagePath, metaPath, params.Passphrase); err != nil {
+	if hasDesktopSessionEntries(manifestResult) {
+		meta.OwnerAccountID, err = accountcheck.ExtractSourceAccount(sourceHome)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return ExportResult{}, fmt.Errorf("claude desktop sessions included but ownerAccountId metadata is missing: %w", err)
+			}
+			return ExportResult{}, err
+		}
+	}
+	if err := pack.CreatePackage(manifestResult, meta, packagePath, metaPath, params.Passphrase, logger); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{PackagePath: packagePath, MetaPath: metaPath, PathScan: scanResult, LogPath: logger.Path()}, nil
@@ -147,6 +180,13 @@ func Import(ctx context.Context, params ImportParams) (types.ConflictReport, err
 		return types.ConflictReport{}, err
 	}
 	defer os.RemoveAll(filepath.Dir(root))
+	targetHome, err := resolveImportTargetHome(params.TargetHome, params.Mapping.TargetHome)
+	if err != nil {
+		return types.ConflictReport{}, err
+	}
+	if err := accountcheck.Check(meta, targetHome, params.SkipDesktopSessionCheck, logger); err != nil {
+		return types.ConflictReport{}, err
+	}
 	mapping, err := normalizeImportMapping(params.Mapping, params.TargetHome, meta.PathScan)
 	if err != nil {
 		return types.ConflictReport{}, err
@@ -202,6 +242,13 @@ func ApplyImport(ctx context.Context, params ImportApplyParams) (types.ImportRes
 		return types.ImportResult{}, err
 	}
 	defer os.RemoveAll(filepath.Dir(root))
+	targetHome, err := resolveImportTargetHome("", params.Mapping.TargetHome)
+	if err != nil {
+		return types.ImportResult{}, err
+	}
+	if err := accountcheck.Check(meta, targetHome, params.SkipDesktopSessionCheck, logger); err != nil {
+		return types.ImportResult{}, err
+	}
 
 	mapping, err := normalizeImportMapping(params.Mapping, "", meta.PathScan)
 	if err != nil {
@@ -262,6 +309,25 @@ func Doctor(ctx context.Context, params DoctorParams) (types.DoctorReport, error
 		AbortOnSkew:         params.AbortOnSkew,
 		PackageAgentVersion: params.PackageAgentVersion,
 	}, logger)
+}
+
+func Inspect(ctx context.Context, params types.InspectParams) (types.PackageMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return types.PackageMeta{}, err
+	}
+	metaPath := deriveMetaPath(params.PkgPath)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return types.PackageMeta{}, types.ErrMetaNotFound
+		}
+		return types.PackageMeta{}, err
+	}
+	var meta types.PackageMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return types.PackageMeta{}, err
+	}
+	return meta, nil
 }
 
 func Rollback(ctx context.Context, params RollbackParams) error {
@@ -339,4 +405,65 @@ func buildSuggestedMapping(scan types.PathScanResult, targetHome string) types.P
 		})
 	}
 	return suggested
+}
+
+func resolveImportTargetHome(fallbackTargetHome, mappedTargetHome string) (string, error) {
+	if mappedTargetHome != "" {
+		return mappedTargetHome, nil
+	}
+	if fallbackTargetHome != "" {
+		return fallbackTargetHome, nil
+	}
+	return os.UserHomeDir()
+}
+
+func collectAgentTypes(manifest types.Manifest) []string {
+	set := map[string]struct{}{}
+	for _, entry := range manifest.Entries {
+		switch {
+		case entry.RelativePath == ".claude.json", strings.HasPrefix(entry.RelativePath, ".claude/"):
+			set["claude-code"] = struct{}{}
+		case strings.HasPrefix(entry.RelativePath, "Library/Application Support/Claude/"):
+			set["claude-desktop"] = struct{}{}
+		}
+	}
+	typesList := make([]string, 0, len(set))
+	for agentType := range set {
+		typesList = append(typesList, agentType)
+	}
+	sort.Strings(typesList)
+	return typesList
+}
+
+func hasAgentType(agentTypes []string, want string) bool {
+	for _, agentType := range agentTypes {
+		if agentType == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDesktopSessionEntries(manifest types.Manifest) bool {
+	for _, entry := range manifest.Entries {
+		if entry.IsDir {
+			continue
+		}
+		if !strings.HasPrefix(entry.RelativePath, "Library/Application Support/Claude/") {
+			continue
+		}
+		for _, scope := range entry.Scopes {
+			if scope == "sessions" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func deriveMetaPath(pkgPath string) string {
+	if strings.HasSuffix(pkgPath, ".ommigrate") {
+		return strings.TrimSuffix(pkgPath, ".ommigrate") + ".meta.json"
+	}
+	return pkgPath + ".meta.json"
 }
