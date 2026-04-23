@@ -18,7 +18,7 @@ func TestRootHelpShowsSubcommands(t *testing.T) {
 		t.Fatalf("exit code = %d stderr=%q", code, errOut.String())
 	}
 	text := out.String()
-	for _, sub := range []string{"doctor", "export", "import", "rollback"} {
+	for _, sub := range []string{"doctor", "export", "inspect", "import", "rollback"} {
 		if !strings.Contains(text, sub) {
 			t.Fatalf("help missing %s: %q", sub, text)
 		}

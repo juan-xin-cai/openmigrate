@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/openmigrate/openmigrate/internal/cli/tui"
 	"github.com/openmigrate/openmigrate/internal/core"
@@ -12,6 +16,7 @@ import (
 
 func NewImportCommand(app *App) *cobra.Command {
 	var yes bool
+	var skipDesktopCheck bool
 	cmd := &cobra.Command{
 		Use:   "import <package.ommigrate>",
 		Short: "导入 OpenMigrate 包",
@@ -30,7 +35,7 @@ func NewImportCommand(app *App) *cobra.Command {
 			if err != nil {
 				return exportCoreError("导入预览失败", err)
 			}
-			fmt.Fprintln(app.Streams.Out, "账号检查: PASS（M1 无 Desktop 数据）")
+			printAccountCheckStatus(app.Streams.Out, preview.Meta)
 
 			mapping := preview.SuggestedMapping
 			if !nonInteractive {
@@ -40,15 +45,33 @@ func NewImportCommand(app *App) *cobra.Command {
 				}
 			}
 
+			skipFlag := skipDesktopCheck
 			conflicts, err := core.Import(context.Background(), core.ImportParams{
-				PackagePath: args[0],
-				Passphrase:  passphrase,
-				TargetHome:  mapping.TargetHome,
-				Mapping:     mapping,
-				Verbose:     app.verboseWriter(),
+				PackagePath:             args[0],
+				Passphrase:              passphrase,
+				TargetHome:              mapping.TargetHome,
+				Mapping:                 mapping,
+				SkipDesktopSessionCheck: skipFlag,
+				Verbose:                 app.verboseWriter(),
 			})
 			if err != nil {
-				return exportCoreError("冲突预检失败", err)
+				if errors.Is(err, types.ErrAccountMismatch) {
+					skipFlag, err = confirmSkipDesktopAccountCheck(app.Streams.In, app.Streams.Out, nonInteractive, err)
+					if err != nil {
+						return err
+					}
+					conflicts, err = core.Import(context.Background(), core.ImportParams{
+						PackagePath:             args[0],
+						Passphrase:              passphrase,
+						TargetHome:              mapping.TargetHome,
+						Mapping:                 mapping,
+						SkipDesktopSessionCheck: skipFlag,
+						Verbose:                 app.verboseWriter(),
+					})
+				}
+				if err != nil {
+					return exportCoreError("冲突预检失败", err)
+				}
 			}
 
 			decisions := defaultConflictDecisions(conflicts)
@@ -63,11 +86,12 @@ func NewImportCommand(app *App) *cobra.Command {
 			err = tui.RunWithProgress(app.Streams.In, app.Streams.Out, app.Streams.ErrOut, !nonInteractive, "正在导入…", app.Verbose, func(update func(string)) error {
 				update("正在调用 core 写入…")
 				importResult, importErr := core.ApplyImport(context.Background(), core.ImportApplyParams{
-					PackagePath: args[0],
-					Passphrase:  passphrase,
-					Mapping:     mapping,
-					Decisions:   decisions,
-					Verbose:     app.verboseWriter(),
+					PackagePath:             args[0],
+					Passphrase:              passphrase,
+					Mapping:                 mapping,
+					Decisions:               decisions,
+					SkipDesktopSessionCheck: skipFlag,
+					Verbose:                 app.verboseWriter(),
 				})
 				result = importResult
 				return importErr
@@ -82,6 +106,7 @@ func NewImportCommand(app *App) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "非交互式执行并采用默认决策")
+	cmd.Flags().BoolVar(&skipDesktopCheck, "skip-desktop-session-check", false, "跳过 Desktop sessions 账号校验")
 	return cmd
 }
 
@@ -102,4 +127,29 @@ func hasConflicts(report types.ConflictReport) bool {
 		}
 	}
 	return false
+}
+
+func printAccountCheckStatus(out io.Writer, meta types.PackageMeta) {
+	if meta.OwnerAccountID != "" {
+		fmt.Fprintln(out, "账号检查: 待验证（包含 Desktop sessions）")
+		return
+	}
+	fmt.Fprintln(out, "账号检查: 无 Desktop sessions，跳过")
+}
+
+func confirmSkipDesktopAccountCheck(in io.Reader, out io.Writer, nonInteractive bool, err error) (bool, error) {
+	fmt.Fprintln(out, "账号不一致：请先打开 Claude Desktop 并登录同一 Anthropic 账号。")
+	if nonInteractive {
+		return false, exitf(1, err, "非交互式模式下账号不一致，中止")
+	}
+	fmt.Fprint(out, "是否忽略并继续导入？（Desktop sessions 将产生 orphan）[y/N] ")
+	reader := bufio.NewReader(in)
+	reply, readErr := reader.ReadString('\n')
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return false, exitf(1, readErr, "读取确认输入失败: %v", readErr)
+	}
+	if strings.EqualFold(strings.TrimSpace(reply), "y") {
+		return true, nil
+	}
+	return false, exitf(1, nil, "已取消")
 }

@@ -16,6 +16,9 @@ import (
 
 func NewExportCommand(app *App) *cobra.Command {
 	var out string
+	var only []string
+	var exclude []string
+	var noHistory bool
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "导出 Claude Code 数据",
@@ -39,11 +42,14 @@ func NewExportCommand(app *App) *cobra.Command {
 			err = tui.RunWithProgress(app.Streams.In, app.Streams.Out, app.Streams.ErrOut, !IsNonInteractive(false, app.Streams.In), "正在导出…", app.Verbose, func(update func(string)) error {
 				update("正在调用 core 导出…")
 				exportResult, exportErr := core.Export(context.Background(), core.ExportParams{
-					Agent:      "claude-code",
-					Version:    "v2",
-					OutputDir:  outputDir,
-					Passphrase: passphrase,
-					Verbose:    app.verboseWriter(),
+					Agent:         "claude-code",
+					Version:       "v2",
+					OutputDir:     outputDir,
+					Passphrase:    passphrase,
+					OnlyScopes:    only,
+					ExcludeScopes: exclude,
+					NoHistory:     noHistory,
+					Verbose:       app.verboseWriter(),
 				})
 				result = exportResult
 				return exportErr
@@ -61,6 +67,9 @@ func NewExportCommand(app *App) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", "", "输出文件或目录")
+	cmd.Flags().StringSliceVar(&only, "only", nil, "只迁移指定 scope（逗号分隔）")
+	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "排除指定 scope（逗号分隔）")
+	cmd.Flags().BoolVar(&noHistory, "no-history", false, "排除历史记录（projects/*.jsonl）")
 	return cmd
 }
 
@@ -104,6 +113,9 @@ func passphraseError(err error) error {
 }
 
 func exportCoreError(prefix string, err error) error {
+	if errors.Is(err, types.ErrConflictingScopeFilter) {
+		return exitf(2, err, "--only 与 --exclude 不能同时指定")
+	}
 	if errors.Is(err, types.ErrDecryptFailed) {
 		return exitf(2, err, "密码错误")
 	}
