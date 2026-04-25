@@ -401,10 +401,27 @@ func buildSuggestedMapping(scan types.PathScanResult, targetHome string) types.P
 	for _, projectRoot := range scan.ProjectRoots {
 		suggested.ProjectMappings = append(suggested.ProjectMappings, types.PathPair{
 			From: projectRoot,
-			To:   "",
+			To:   suggestProjectTarget(projectRoot, scan.HomePrefix, targetHome),
 		})
 	}
 	return suggested
+}
+
+// suggestProjectTarget rewrites a source project root under sourceHome onto
+// targetHome and returns the candidate path only when it exists on disk.
+// Empty result keeps the row marked as "未找到" so the user can fill it in.
+func suggestProjectTarget(projectRoot, sourceHome, targetHome string) string {
+	if sourceHome == "" || targetHome == "" {
+		return ""
+	}
+	if !strings.HasPrefix(projectRoot, sourceHome+"/") {
+		return ""
+	}
+	candidate := targetHome + strings.TrimPrefix(projectRoot, sourceHome)
+	if _, err := os.Stat(candidate); err != nil {
+		return ""
+	}
+	return candidate
 }
 
 func resolveImportTargetHome(fallbackTargetHome, mappedTargetHome string) (string, error) {
