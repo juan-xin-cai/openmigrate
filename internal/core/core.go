@@ -430,6 +430,7 @@ func buildSuggestedMapping(scan types.PathScanResult, targetHome string) types.P
 // targetHome and returns the candidate path only when it exists on disk.
 // Empty result keeps the row marked as "跳过 (home 兜底)"; the project path
 // will be rewritten via the SourceHome→TargetHome fallback at apply time.
+// Empty result keeps the row marked as "未找到" so the user can fill it in.
 func suggestProjectTarget(projectRoot, sourceHome, targetHome string) string {
 	if sourceHome == "" || targetHome == "" {
 		return ""
