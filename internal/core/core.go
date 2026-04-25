@@ -383,13 +383,32 @@ func normalizeImportMapping(mapping types.PathMapping, fallbackTargetHome string
 		}
 		normalized.TargetHome = home
 	}
-	if len(scan.ProjectRoots) > 0 && len(normalized.ProjectMappings) == 0 {
+	// Project mappings are optional: any project path that the user did not
+	// explicitly redirect falls through to the SourceHome→TargetHome rewrite
+	// in MapAbsolutePath. This keeps batch imports practical when there are
+	// dozens of sessions to map.
+	normalized.ProjectMappings = filterValidProjectMappings(normalized.ProjectMappings)
+	if normalized.SourceHome == "" && len(normalized.ProjectMappings) == 0 && len(scan.ProjectRoots) > 0 {
 		return types.PathMapping{}, types.ErrPathMappingRequired
 	}
 	if len(normalized.ExternalPaths) == 0 {
 		normalized.ExternalPaths = append([]string(nil), scan.ExternalPaths...)
 	}
 	return normalized, nil
+}
+
+func filterValidProjectMappings(pairs []types.PathPair) []types.PathPair {
+	if len(pairs) == 0 {
+		return nil
+	}
+	out := make([]types.PathPair, 0, len(pairs))
+	for _, pair := range pairs {
+		if pair.From == "" || pair.To == "" {
+			continue
+		}
+		out = append(out, pair)
+	}
+	return out
 }
 
 func buildSuggestedMapping(scan types.PathScanResult, targetHome string) types.PathMapping {
@@ -409,7 +428,8 @@ func buildSuggestedMapping(scan types.PathScanResult, targetHome string) types.P
 
 // suggestProjectTarget rewrites a source project root under sourceHome onto
 // targetHome and returns the candidate path only when it exists on disk.
-// Empty result keeps the row marked as "未找到" so the user can fill it in.
+// Empty result keeps the row marked as "跳过 (home 兜底)"; the project path
+// will be rewritten via the SourceHome→TargetHome fallback at apply time.
 func suggestProjectTarget(projectRoot, sourceHome, targetHome string) string {
 	if sourceHome == "" || targetHome == "" {
 		return ""
