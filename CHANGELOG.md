@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/juan-xin-cai/openmigrate/compare/v0.1.0...v0.1.1) (2026-04-25)
+
+
+### Bug Fixes
+
+* **core:** 导入预览自动预填可命中的项目路径 ([#3](https://github.com/juan-xin-cai/openmigrate/issues/3)) ([52f8d2e](https://github.com/juan-xin-cai/openmigrate/commit/52f8d2eafd5a56e1464f910ef39ab72291ab387a))
+
 ## 0.1.0 (2026-04-23)
 
 
