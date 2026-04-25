@@ -38,11 +38,7 @@ func RunPathMapping(input io.Reader, output io.Writer, preview types.ImportPrevi
 		})
 	}
 	for _, pair := range preview.SuggestedMapping.ProjectMappings {
-		status := "[已匹配]"
-		if pair.To == "" {
-			status = "⚠ 未找到"
-		}
-		rows = append(rows, pathRow{Source: pair.From, Status: status, Target: pair.To})
+		rows = append(rows, pathRow{Source: pair.From, Status: statusFor(pair.To, false), Target: pair.To})
 	}
 	editor := textinput.New()
 	editor.Placeholder = "输入目标路径"
@@ -75,13 +71,7 @@ func (m pathMappingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch typed.String() {
 			case "enter":
 				m.rows[m.cursor].Target = strings.TrimSpace(m.input.Value())
-				if m.rows[m.cursor].Target == "" {
-					m.rows[m.cursor].Status = "⚠ 未找到"
-				} else if m.cursor == 0 {
-					m.rows[m.cursor].Status = "[自动]"
-				} else {
-					m.rows[m.cursor].Status = "[已匹配]"
-				}
+				m.rows[m.cursor].Status = statusFor(m.rows[m.cursor].Target, m.cursor == 0)
 				m.message = ""
 				m.editing = false
 				return m, nil
@@ -115,17 +105,13 @@ func (m pathMappingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editing = true
 			return m, textinput.Blink
 		case "a", "A":
-			m.rows = append(m.rows, pathRow{Status: "⚠ 未找到"})
+			m.rows = append(m.rows, pathRow{Status: statusFor("", false)})
 			m.cursor = len(m.rows) - 1
 			m.input.SetValue("")
 			m.message = ""
 			m.editing = true
 			return m, textinput.Blink
 		case "enter":
-			if m.hasUnresolvedRows() {
-				m.message = "请先填写标记为 ⚠ 未找到 的目标路径"
-				return m, nil
-			}
 			m.message = ""
 			return m, tea.Quit
 		}
@@ -145,8 +131,8 @@ func (m pathMappingModel) View() string {
 			cursor = "> "
 		}
 		status := row.Status
-		if strings.Contains(status, "⚠") {
-			status = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(status)
+		if strings.Contains(status, "⤼") {
+			status = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(status)
 		}
 		fmt.Fprintf(&b, "%s%s\n  源: %s\n  目标: %s\n", cursor, status, row.Source, row.Target)
 		if i == m.cursor && m.editing {
@@ -158,17 +144,19 @@ func (m pathMappingModel) View() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(m.message))
 		b.WriteString("\n")
 	}
-	b.WriteString("\n[↑/↓] 选择  [空格] 编辑  [A] 新增  [回车] 确认  [q] 取消\n")
+	b.WriteString("\n留空表示跳过该项（按 home 前缀兜底替换）\n")
+	b.WriteString("[↑/↓] 选择  [空格] 编辑  [A] 新增  [回车] 确认  [q] 取消\n")
 	return b.String()
 }
 
-func (m pathMappingModel) hasUnresolvedRows() bool {
-	for _, row := range m.rows {
-		if strings.TrimSpace(row.Target) == "" {
-			return true
-		}
+func statusFor(target string, isHomeRow bool) string {
+	if strings.TrimSpace(target) == "" {
+		return "⤼ 跳过（home 兜底）"
 	}
-	return false
+	if isHomeRow {
+		return "[自动]"
+	}
+	return "[已匹配]"
 }
 
 func (m pathMappingModel) mapping(external []string) types.PathMapping {

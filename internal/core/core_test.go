@@ -45,3 +45,50 @@ func TestBuildSuggestedMappingSkipsWhenSourceHomeMissing(t *testing.T) {
 		t.Fatalf("project mappings = %#v", got.ProjectMappings)
 	}
 }
+
+func TestNormalizeImportMappingAllowsEmptyProjectMappingsWhenHomeKnown(t *testing.T) {
+	scan := types.PathScanResult{
+		HomePrefix:   "/Users/feifei",
+		ProjectRoots: []string{"/Users/feifei/projects/foo", "/Users/feifei/projects/bar"},
+	}
+	got, err := normalizeImportMapping(types.PathMapping{TargetHome: "/Users/roy"}, "", scan)
+	if err != nil {
+		t.Fatalf("expected no error when home is known and user skipped all rows, got %v", err)
+	}
+	if len(got.ProjectMappings) != 0 {
+		t.Fatalf("project mappings = %#v", got.ProjectMappings)
+	}
+	if got.SourceHome != "/Users/feifei" || got.TargetHome != "/Users/roy" {
+		t.Fatalf("home prefixes = (%q, %q)", got.SourceHome, got.TargetHome)
+	}
+}
+
+func TestNormalizeImportMappingDropsEmptyPairs(t *testing.T) {
+	scan := types.PathScanResult{
+		HomePrefix:   "/Users/feifei",
+		ProjectRoots: []string{"/Users/feifei/projects/foo", "/Users/feifei/projects/bar"},
+	}
+	in := types.PathMapping{
+		TargetHome: "/Users/roy",
+		ProjectMappings: []types.PathPair{
+			{From: "/Users/feifei/projects/foo", To: "/Users/roy/work/foo"},
+			{From: "/Users/feifei/projects/bar", To: ""},
+		},
+	}
+	got, err := normalizeImportMapping(in, "", scan)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if len(got.ProjectMappings) != 1 || got.ProjectMappings[0].From != "/Users/feifei/projects/foo" {
+		t.Fatalf("project mappings = %#v", got.ProjectMappings)
+	}
+}
+
+func TestNormalizeImportMappingErrorsWhenHomeAndMappingsMissing(t *testing.T) {
+	scan := types.PathScanResult{
+		ProjectRoots: []string{"/Users/feifei/projects/foo"},
+	}
+	if _, err := normalizeImportMapping(types.PathMapping{TargetHome: "/Users/roy"}, "", scan); err == nil {
+		t.Fatalf("expected ErrPathMappingRequired when no home prefix is known")
+	}
+}
